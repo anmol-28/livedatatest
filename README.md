@@ -64,7 +64,7 @@ A real-time data pipeline that fetches International Space Station (ISS) locatio
 
 ## 📦 Prerequisites
 
-Before running this project, ensure you have:
+Before running this project, ensure you should have:
 
 - **Node.js** (v14 or higher) - [Download](https://nodejs.org/)
 - **Apache Kafka** (running and accessible)
