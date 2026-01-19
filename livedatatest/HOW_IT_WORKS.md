@@ -13,8 +13,13 @@ This document explains how the Live ISS Location Data Pipeline works - from fetc
    ↓
 2. Producer publishes to Kafka
    ↓
-3. Dashboard consumes from Kafka
-   ↓
+3. Kafka delivers to multiple consumers:
+   ├──→ Flink (Stream Processing)
+   │     - Processes data in real-time
+   │     - Performs transformations/analytics
+   │
+   └──→ Dashboard Backend (Visualization)
+         ↓
 4. Dashboard sends to browser via WebSocket
    ↓
 5. Browser displays in table
@@ -80,7 +85,48 @@ This document explains how the Live ISS Location Data Pipeline works - from fetc
 
 ---
 
-### Step 3: Data Consumption (Dashboard Backend)
+### Step 3: Stream Processing (Flink)
+
+**What happens:**
+1. Flink connects to Kafka as a consumer
+2. Subscribes to the `iss-location` topic
+3. Creates a Flink SQL table to read from Kafka:
+   ```sql
+   CREATE TABLE iss_location (
+       ts BIGINT,
+       latitude DOUBLE,
+       longitude DOUBLE,
+       eventTime AS TO_TIMESTAMP_LTZ(ts, 3)
+   ) WITH (
+       'connector' = 'kafka',
+       'topic' = 'iss-location',
+       'properties.bootstrap.servers' = 'host.docker.internal:9092',
+       'format' = 'json'
+   );
+   ```
+
+4. When a new message arrives:
+   - Flink processes the data in real-time
+   - Can perform transformations, aggregations, windowing
+   - Can write to another Kafka topic or sink
+   - Enables real-time analytics and stream processing
+
+**Key Features:**
+- Runs in Docker containers (JobManager + TaskManager)
+- Processes data in parallel with dashboard consumer
+- Enables complex stream processing operations
+- Can perform real-time analytics on ISS location data
+
+**Why Flink?**
+- Real-time stream processing
+- Complex event processing
+- Window operations (time-based aggregations)
+- Stateful processing
+- Can join multiple data streams
+
+---
+
+### Step 4: Data Consumption (Dashboard Backend)
 
 **File:** `dashboard/app.js`
 
@@ -100,7 +146,7 @@ This document explains how the Live ISS Location Data Pipeline works - from fetc
 
 ---
 
-### Step 4: Real-Time Delivery (WebSocket)
+### Step 5: Real-Time Delivery (WebSocket)
 
 **What happens:**
 1. Browser connects to WebSocket at `ws://localhost:3000/ws`
@@ -115,7 +161,7 @@ This document explains how the Live ISS Location Data Pipeline works - from fetc
 
 ---
 
-### Step 5: Display (Browser)
+### Step 6: Display (Browser)
 
 **File:** `dashboard/index.html`
 
@@ -152,9 +198,15 @@ Time: 10:00:00
 │  └─ Topic: "iss-location"
 │  └─ Message stored in Kafka
 │
-├─ Dashboard Backend: Consumes from Kafka
-│  └─ Receives message from Kafka
-│  └─ Parses JSON
+├─ Kafka: Message available to consumers
+│  │
+│  ├─ Flink: Consumes from Kafka
+│  │  └─ Processes in real-time
+│  │  └─ Can perform transformations/analytics
+│  │
+│  └─ Dashboard Backend: Consumes from Kafka
+│     └─ Receives message from Kafka
+│     └─ Parses JSON
 │
 ├─ Dashboard Backend: Broadcasts via WebSocket
 │  └─ Sends to all connected browsers
@@ -196,6 +248,20 @@ Time: 10:00:00
 - Know about producers/consumers
 - Display data
 
+### Flink Component
+
+**Runs:** Continuously (Docker containers)
+**Does:**
+- Consumes from Kafka
+- Processes data in real-time
+- Performs stream transformations
+- Enables analytics and aggregations
+
+**Does NOT:**
+- Fetch data from API
+- Display data in browser
+- Know about dashboard
+
 ### Dashboard Backend Component
 
 **Runs:** Continuously (HTTP server)
@@ -208,7 +274,7 @@ Time: 10:00:00
 **Does NOT:**
 - Fetch data from API
 - Store data
-- Know about producer
+- Know about producer or Flink
 
 ### Browser Component
 
@@ -258,34 +324,38 @@ Data flows continuously:
 
 Kafka is the central hub:
 - Producer writes to Kafka
-- Dashboard reads from Kafka
+- Flink reads from Kafka (stream processing)
+- Dashboard reads from Kafka (visualization)
 - All data flows through Kafka
 
-**Benefit:** Easy to add more consumers (e.g., Flink, analytics)
+**Benefit:** Multiple consumers can process the same data independently
 
 ---
 
 ## Timing Diagram
 
 ```
-Producer          Kafka          Dashboard         Browser
-   │                │                │                │
-   │─── API GET ────│                │                │
-   │                │                │                │
-   │─── Publish ───>│                │                │
-   │                │                │                │
-   │                │<── Consume ────│                │
-   │                │                │                │
-   │                │                │─── WebSocket ─>│
-   │                │                │                │
-   │                │                │                │─── Display ──> User
+Producer          Kafka          Flink            Dashboard         Browser
+   │                │                │                │                │
+   │─── API GET ────│                │                │                │
+   │                │                │                │                │
+   │─── Publish ───>│                │                │                │
+   │                │                │                │                │
+   │                │<── Consume ────│                │                │
+   │                │                │                │                │
+   │                │<── Consume ────┼────────────────│                │
+   │                │                │                │                │
+   │                │                │                │─── WebSocket ─>│
+   │                │                │                │                │
+   │                │                │                │                │─── Display ──> User
 ```
 
 **Timeline:**
 - 0ms: Producer starts API request
 - 150ms: API responds
 - 175ms: Producer publishes to Kafka
-- 190ms: Dashboard consumes from Kafka
+- 190ms: Flink consumes from Kafka (parallel)
+- 190ms: Dashboard consumes from Kafka (parallel)
 - 191ms: Dashboard sends via WebSocket
 - 200ms: Browser displays in table
 
@@ -318,11 +388,12 @@ http://localhost:3000
 **In simple terms:**
 
 1. **Producer** = Fetches ISS location every 60 seconds → Sends to Kafka
-2. **Kafka** = Stores messages → Delivers to consumers
-3. **Dashboard Backend** = Reads from Kafka → Sends to browsers
-4. **Browser** = Receives data → Shows in table
+2. **Kafka** = Stores messages → Delivers to multiple consumers
+3. **Flink** = Reads from Kafka → Processes data in real-time → Enables analytics
+4. **Dashboard Backend** = Reads from Kafka → Sends to browsers
+5. **Browser** = Receives data → Shows in table
 
-**The magic:** All happens automatically in real-time, no manual refresh needed!
+**The magic:** All happens automatically in real-time, no manual refresh needed! Flink and Dashboard consume in parallel from the same Kafka topic.
 
 ---
 
@@ -342,6 +413,12 @@ A: Producer fetches new ISS location every 60 seconds
 
 **Q: Do I need to refresh the page?**
 A: No! The dashboard updates automatically via WebSocket
+
+**Q: How does Flink fit in?**
+A: Flink consumes from the same Kafka topic in parallel with the dashboard. It processes the stream in real-time for analytics and transformations.
+
+**Q: Can Flink and Dashboard both read the same data?**
+A: Yes! Kafka allows multiple consumers to read from the same topic independently. Each maintains its own offset.
 
 ---
 
