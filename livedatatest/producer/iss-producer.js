@@ -110,7 +110,7 @@ async function main() {
         // Fetch and publish every 60 seconds
         setInterval(async () => {
             await fetchAndPublish();
-        }, 60000);
+        }, 30000);
 
     } catch (error) {
         console.error('Failed to start producer:', error.message);
